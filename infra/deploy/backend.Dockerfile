@@ -4,13 +4,13 @@ FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb06
 
 WORKDIR /app
 COPY contracts ./contracts
-COPY scripts ./scripts
 COPY backend/requirements ./backend/requirements
 # constraints.txt pins every package, so a rebuild can't quietly pull in something new.
 RUN pip install --no-cache-dir -c backend/requirements/constraints.txt -e ./contracts/python \
     -r backend/requirements/brain.txt -r backend/requirements/senses.txt
 COPY backend/app ./backend/app
 COPY backend/migrations ./backend/migrations
+COPY infra/osm/data ./infra/osm/data
 
 # documents must exist here: a new named volume takes its owner from the image, or PO PDFs can't be written.
 RUN useradd --create-home relief && mkdir -p /data/documents && chown -R relief /data

@@ -35,6 +35,9 @@ RETRY_AFTER_FAILURE_S = 120
 
 
 def build_sources(settings: SensesSettings) -> list[Source]:
+    from .initial_sync import ensure_osm_extracts
+    ensure_osm_extracts(settings.places_extract_path, settings.admin_extract_path, settings.facilities_extract_path)
+
     sources: list[Source] = [
         # Boundaries first: the SACHET fallback resolves area names against them.
         OsmExtractSource(settings.places_extract_path, settings.admin_extract_path, settings.osm_extract_poll_s),

@@ -86,10 +86,6 @@ class OsmExtractSource:
         self.breaker = CircuitBreaker("osm_extract")
 
     async def fetch(self, http: httpx.AsyncClient, conn: asyncpg.Pool) -> FetchResult:
-        if not self.places_path.exists() or not self.admin_path.exists():
-            from app.ingestion.initial_sync import ensure_osm_extracts
-            fac_path = self.places_path.parent / "facilities.geojsonseq"
-            ensure_osm_extracts(self.places_path, self.admin_path, fac_path)
         missing = [str(p) for p in (self.places_path, self.admin_path) if not p.exists()]
         if missing:
             raise SourceUnavailable(self.name, f"run infra/osm/extract_places_admin.sh; missing {missing}")

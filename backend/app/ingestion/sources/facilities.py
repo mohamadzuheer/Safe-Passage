@@ -132,11 +132,6 @@ class FacilitiesSource:
             except SourceUnavailable as exc:
                 errors.append(f"{url}: {exc.reason}")
         if not self.extract.exists():
-            from app.ingestion.initial_sync import ensure_osm_extracts
-            places_p = self.extract.parent / "places.geojsonseq"
-            admin_p = self.extract.parent / "admin.geojsonseq"
-            ensure_osm_extracts(places_p, admin_p, self.extract)
-        if not self.extract.exists():
             raise SourceUnavailable(self.name, "; ".join(errors) + "; no fallback extract")
         found = parse_extract(self.extract)
         log.warning("overpass_unavailable_using_extract", errors=errors, facilities=len(found), path=str(self.extract))

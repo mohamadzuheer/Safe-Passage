@@ -4,4 +4,5 @@
 !backend/requirements
 !backend/app
 !backend/migrations
+!infra/osm/data
 **/__pycache__
