@@ -41,7 +41,7 @@ services:
     runtime: docker
     plan: 0.5c-512mb
     region: singapore
-    branch: integration/gate3
+    branch: main
     dockerContext: .
     dockerfilePath: ./infra/deploy/backend.Dockerfile
     preDeployCommand: python -m app.core.migrate
@@ -69,7 +69,7 @@ services:
     runtime: docker
     plan: 0.5c-512mb
     region: singapore
-    branch: integration/gate3
+    branch: main
     dockerContext: .
     dockerfilePath: ./infra/deploy/backend.Dockerfile
     dockerCommand: sh -c "python -m app.core.migrate && exec python -m app.graph.worker"
@@ -93,7 +93,7 @@ services:
     runtime: docker
     plan: 0.5c-512mb
     region: singapore
-    branch: integration/gate3
+    branch: main
     dockerContext: .
     dockerfilePath: ./infra/deploy/backend.Dockerfile
     dockerCommand: sh -c "python -m app.core.migrate && exec python -m app.ingestion.worker"
@@ -120,7 +120,7 @@ services:
     runtime: docker
     plan: 0.5c-512mb
     region: singapore
-    branch: integration/gate3
+    branch: main
     dockerContext: .
     dockerfilePath: ./infra/deploy/demo.Dockerfile
     buildFilter:
@@ -135,7 +135,7 @@ services:
     runtime: docker
     plan: 1c-2g
     region: singapore
-    branch: integration/gate3
+    branch: main
     dockerContext: .
     dockerfilePath: ./infra/deploy/valhalla.Dockerfile
     buildFilter:
