@@ -1,27 +1,63 @@
-# secrets
+# ==============================================================================
+# SafePassage (.gitignore)
+# ==============================================================================
+
+# Secrets and Environment Files
 .env
 .env*
 *.env
 *.env*
+!*.env.example
 !env/*.env.example
 !frontend/.env.example
 !infra/deploy/.env.example
-# python
+!backend/.env.example
+
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
 .venv/
+*_venv/
 .pytest_cache/
 *.egg-info/
 .mypy_cache/
 .ruff_cache/
-# node
+*.log
+
+# Node & Next.js
 node_modules/
 .next/
+out/
 dist/
-# os / editors
+build/
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing & Coverage
+/coverage
+/test-results
+/playwright-report
+
+# OS & Editors
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
-# local data
+*.swp
+*.swo
+
+# Local GIS, Tile Cache & Working Scratch
 infra/valhalla_tiles/
 *.pbf
+reliefroute-data/
+scratch/
+backend/scratch/

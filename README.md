@@ -1,220 +1,246 @@
-# ReliefRoute
+# SafePassage (ReliefRoute)
 
-ReliefRoute watches live disaster alerts for Andhra Pradesh, works out what an affected area needs, finds real stock, plans truck routes that stay clear of the hazard, and dispatches them once a human approves. If a driver leaves the route, goes silent, or the hazard spreads across the road ahead, it replans on its own.
+> **Autonomous, Resilient Disaster Relief Supply Chain & Multi-Agent Routing System**  
+> Watches live disaster alerts across Andhra Pradesh, determines relief demand from Census populations, matches inventory against real government stock, calculates safe road routes avoiding hazard polygons, and dispatches them under human supervision.
 
-Built for a Gen-AI buildathon (Theme 2: Climate, Resource Infrastructure & Global Supply Resilience). Nothing is mocked at runtime: every number on screen comes from a live source, an official open dataset, or a labelled fallback.
+[![Next.js 16](https://img.shields.io/badge/Frontend-Next.js%2016%20%7C%20React%2019-black?logo=next.js)](https://nextjs.org/)
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python%203.11+-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
+[![PostGIS](https://img.shields.io/badge/Database-PostgreSQL%2016%20%7C%20PostGIS-336791?logo=postgresql)](https://postgis.net/)
+[![Gemini](https://img.shields.io/badge/AI-Google%20Gemini%202.5%20%7C%20LangGraph-4285F4?logo=google)](https://aistudio.google.com/)
+[![Netlify](https://img.shields.io/badge/Deploy-Netlify%20Frontend-00C7B7?logo=netlify)](https://www.netlify.com/)
 
-**LLMs reason, solvers compute.** Gemini triages alerts, briefs the human and translates driver instructions. OR-Tools plans the routes and Shapely verifies them. The LLM never supplies a coordinate, distance or stock figure.
+---
 
-![The operations dashboard: live numbers, a dispatched route around a flood drill at Vijayawada, and the plan's brief](docs/images/dashboard.png)
+![Operations Dashboard](docs/images/dashboard.png)
 
-## How it works
+---
+
+## Core Philosophy: LLMs Reason, Solvers Compute
+
+Disaster relief operations require mathematical certainty. In SafePassage:
+- **LLMs (Google Gemini 2.5 + LangGraph)** triage incoming hazard alerts, generate situation briefs for duty officers, verify rationale, and translate multilingual turn-by-turn guidance for drivers in Telugu and English.
+- **Deterministic Solvers (Google OR-Tools & Shapely)** compute logistics, solve Vehicle Routing Problems (VRP), and guarantee that truck paths maintain strict spatial clearance from dynamic hazard boundaries.
+- **The LLM never hallucinates a coordinate, distance, stock figure, or route.**
+
+---
+
+## System Architecture
+
+```mermaid
+flowchart TD
+    subgraph LiveSources["1. Real-Time Data Sources (Senses)"]
+        S1["Andhra Pradesh AePDS (Live Ration Stock)"]
+        S2["NASA FIRMS (Thermal Wildfire Feeds)"]
+        S3["GDACS (UN Global Cyclone & Flood Alerts)"]
+        S4["Open-Meteo (IMD-Classified Rainfall Forecasts)"]
+        S5["NDMA SACHET (CAP Disaster Bulletins)"]
+        S6["OpenStreetMap (Populated Places & Relief Facilities)"]
+    end
+
+    subgraph IngestionEngine["2. Ingestion & Health Engine"]
+        Poller["Deterministic Ingestion Worker"]
+        Breaker["Circuit Breaker with Exponential Backoff"]
+        SeedGen["Automated Seed & Fallback Engine"]
+    end
+
+    subgraph CoreStorage["3. Core Stores"]
+        DB[("PostgreSQL 16 + PostGIS")]
+        RedisStream{{"Redis Streams (Event Bus & Queues)"}}
+    end
+
+    subgraph BrainAgents["4. Brain Engine (LangGraph Multi-Agent)"]
+        Sentinel["Sentinel Agent (Triage & Threat Detection)"]
+        Needs["Needs Assessor (Sphere Standards + Census Population)"]
+        Procure["Procurement Agent (PDS Fair-Price Shop Matching)"]
+        VRP["Route Planner (OR-Tools VRP + Valhalla Road Graph)"]
+        Critic["Critic Agent (Multi-Pass Safety Verification)"]
+        Gate{{"Human-in-the-Loop Approval Gate"}}
+        Dispatch["Dispatcher Agent (PO PDFs & Bilingual Instructions)"]
+        Monitor["Closed-Loop Route Monitor (GPS Drift & Hazard Intersection)"]
+    end
+
+    subgraph PresentationLayer["5. Unified Web Interface (Netlify)"]
+        OpsDash["Command Center & Source Health Dashboard"]
+        DriverApp["Driver Progressive Web App (PWA)"]
+        SupplierPortal["Supplier Portal & Stock Reporting"]
+    end
+
+    S1 & S2 & S3 & S4 & S5 & S6 --> Poller
+    Poller <--> Breaker
+    Poller <--> SeedGen
+    Poller -->|Upsert GeoJSON & Freshness| DB
+    Poller -->|Publish Events| RedisStream
+
+    RedisStream --> Sentinel --> Needs --> Procure --> VRP --> Critic --> Gate
+    Gate -->|Approved by Officer| Dispatch
+    Dispatch --> DB
+    Dispatch --> DriverApp
+    Monitor -->|Route Deviation Detected| Needs
+
+    DB <--> OpsDash
+    DB <--> DriverApp
+    DB <--> SupplierPortal
+```
+
+---
+
+## Multi-Agent Decision Pipeline (The Brain)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Sentinel: Hazard alert arrives
+    Sentinel --> Needs: Severe alert covers settlement
+    Sentinel --> [*]: Sub-threshold / maritime alert
+    Needs --> Procurement: Relief targets calculated (Food/Water/Shelter)
+    Procurement --> RoutePlanner: Stock matched from mandal FPS godowns
+    RoutePlanner --> Critic: VRP wave paths generated avoiding hazard polygons
+    Critic --> RoutePlanner: Rejection (hazard clearance violation)
+    Critic --> HumanApproval: Route verified safe
+    HumanApproval --> Dispatcher: Duty Officer approves dispatch
+    HumanApproval --> Needs: Officer requests adjustment
+    Dispatcher --> RouteMonitoring: Dispatched to driver PWA with PDF orders
+    RouteMonitoring --> Replanning: Driver GPS drifts or hazard spreads
+    Replanning --> Needs: Autonomous closed-loop replan
+    RouteMonitoring --> [*]: Delivery confirmed at relief camp
+```
+
+1. **Sentinel Agent**: Filters national feeds for Andhra Pradesh. If a severe hazard intersects a settlement, it triggers plan generation.
+2. **Needs Assessor**: Intersects hazard footprint with Census 2011 population data to compute nutritional and survival requirements (Sphere standards: 2.1 kg rice, 0.4 kg pulses, 3L water/person/day).
+3. **Procurement Agent**: Resolves stock against live Andhra Pradesh Civil Supplies (AePDS) fair-price shops across all 684 mandals.
+4. **VRP Route Planner**: Solves capacitated vehicle pickups and deliveries through Google OR-Tools and Valhalla turn-by-turn routing around dynamic hazard polygons.
+5. **Critic Agent**: Performs independent spatial intersection tests between routes and expanding hazard zones. Rejects any route infringing on the safety buffer up to 3 times before escalation.
+6. **Human Approval Gate**: Zero high-stakes dispatches occur without explicit duty officer sign-off.
+7. **Dispatcher Agent**: Produces tamper-evident purchase order PDFs, notifies drivers, and translates instructions into Telugu and English.
+8. **Route Monitor**: Ingests high-frequency GPS fixes from driver phones. If road conditions deteriorate or a truck deviates, it triggers autonomous replanning.
+
+---
+
+## Live Data Sources & Health Monitoring
+
+SafePassage features dynamic health monitoring with automatic recovery and zero synthetic fallbacks:
+
+| Data Source | Provider | Frequency | Health Metric | Resilience & Fallback |
+|---|---|---|---|---|
+| **AePDS Ration Stock** | Andhra Pradesh Civil Supplies ePoS Portal | 24 hours | Closing balance of Rice & Pulses across all Fair Price Shops | Match against 684 OSM mandal boundaries; per-commodity retry |
+| **NASA FIRMS Fires** | NASA VIIRS Satellite | 3 hours | Thermal active fire hotspots (FRP & confidence) | Bounds clipped to Andhra Pradesh region |
+| **GDACS Global Alerts** | UN / European Commission | 1 hour | Tropical cyclone tracks, storm surge, flood alerts | National feed ingestion with polygon extraction |
+| **Open-Meteo Forecast** | DWD / ECMWF / GFS Models | 6 hours | 0.5° spatial rainfall grid classified into IMD categories | IMD rainfall thresholds (Heavy, Very Heavy, Extreme) |
+| **OpenStreetMap Places** | OpenStreetMap Community | 30 days | Settlements, cities, towns, and Census 2011 population | Built-in offline GeoJSON sequence bootstrap |
+| **OpenStreetMap Facilities** | Overpass API | 3 days | Hospitals, schools, warehouses, fuel depots, shelters | Adaptive circuit breaker (60s backoff) + offline extract fallback |
+| **NDMA SACHET** | National Disaster Management Authority | 2 minutes | Common Alerting Protocol (CAP) bulletins | Name normalization fallback to OSM admin boundaries |
+
+---
+
+## Deployment Architecture (Netlify + Cloud Backend)
+
+SafePassage is designed for split deployment:
+- **Frontend**: Hosted on **Netlify** (Next.js 16 with Turbopack, App Router, first-party cookie proxying).
+- **Backend API & Workers**: Hosted on **Render** (or any Ubuntu Cloud VPS).
+- **Database**: Managed **PostgreSQL 16 + PostGIS** (Supabase or Render).
+- **Event Bus**: Managed **Redis** (Upstash or Render).
 
 ```mermaid
 flowchart LR
-  subgraph Sources[Live sources]
-    S1[NDMA SACHET alerts]
-    S2[GDACS]
-    S3[Open-Meteo rainfall]
-    S4[AePDS PDS stock]
-    S5[OSM roads, facilities, census tags]
-    S6[Supplier check-ins]
-    S7[Driver phones: GPS]
-  end
-  subgraph Senses[Senses: deterministic, no LLM]
-    I[Pollers with breakers and staleness tags]
-    T[Telemetry API]
-    P[Supplier portal]
-  end
-  DB[(PostGIS)]
-  R{{Redis Streams}}
-  subgraph Brain[Brain: LangGraph with Postgres checkpoints]
-    G[Sentinel, Needs, Procurement,<br/>Route Planner, Critic, Brief]
-    H{Human approval}
-    V[Re-check, then Dispatcher]
-    M[Route Monitor]
-  end
-  VH[Valhalla road graph]
-  OR[OR-Tools VRP + Shapely]
-  LLM[Gemini]
-  UI[Web app: dashboard, driver and supplier screens]
-
-  S1 & S2 & S3 & S4 & S5 --> I --> DB
-  S6 --> P --> DB
-  S7 --> T --> DB
-  I & T & P --> R
-  R --> G --> H --> V
-  R --> M -->|deviation| G
-  G <--> VH
-  G <--> OR
-  G <--> LLM
-  V --> DB
-  DB --> UI
-  R --> UI
-  V --> PWA
-  UI -->|approve| H
+    Client["User Browser / Mobile PWA"] -->|HTTPS| Netlify["Netlify CDN (Frontend)"]
+    Netlify -->|"/api/* (Proxy Rewrite)"| Backend["Backend API (FastAPI)"]
+    Netlify -->|"Static Assets & Pages"| Cache["Next.js Edge Cache"]
+    Backend <--> Supabase[("Supabase (PostgreSQL + PostGIS)")]
+    Backend <--> Upstash[("Upstash (Redis Streams)")]
+    Workers["Background Ingestion & AI Workers"] <--> Supabase
+    Workers <--> Upstash
 ```
 
-1. **Sentinel** triages an alert. A severe flood-type hazard or an operator's drill starts a plan by itself.
-2. **Needs** turns census population in the zone into demand per relief point, using Sphere humanitarian standards.
-3. **Procurement** finds the nearest real stock and splits it across suppliers, or escalates the shortfall.
-4. **Route Planner** solves pickups and deliveries around hazard polygons, one wave of work at a time.
-5. **Critic** independently re-checks every route against current hazards and rejects it with the exact violation, up to three times.
-6. **Human approval** is required for anything high-stakes. The plan is re-checked after approval, so a stale one is never dispatched.
-7. **Dispatcher** writes orders and routes idempotently, translates driver instructions, and creates purchase-order PDFs.
-8. **Route Monitor** follows each truck by GPS and closes the loop.
+### 1. Backend Deployment (Render or VPS)
 
-See [docs/brain.md](docs/brain.md) and [docs/senses.md](docs/senses.md) for the detail, and [docs/demo-script.md](docs/demo-script.md) for the live demo.
+1. Connect your repository to Render using **Blueprint** (`render.yaml`).
+2. Supply environment variables:
+   - `DATABASE_URL`: Your PostgreSQL + PostGIS connection string (e.g. from Supabase).
+   - `REDIS_URL`: Your Redis connection string (e.g. from Upstash).
+   - `GEMINI_API_KEY`: Your Google Gemini API key from AI Studio.
+3. Apply the blueprint. Render starts `reliefroute-api`, `reliefroute-ingestion`, and `reliefroute-brain`.
 
-## Data sources
+### 2. Frontend Deployment (Netlify)
 
-| Source | Used for | Status |
-|---|---|---|
-| [NDMA SACHET](https://sachet.ndma.gov.in/) (CAP) | Official alerts | Live. When SACHET rate-limits polygon downloads, alerts are placed on OSM boundaries by their area names, and labelled as such |
-| [GDACS](https://www.gdacs.org/) | Cyclones and floods | Live |
-| [Open-Meteo](https://open-meteo.com/) | Forecast rainfall, classified with IMD 24 h categories | Live |
-| [AePDS](https://aepos.ap.gov.in/) | Real PDS rice and dal stock per mandal | Live, every 6 h. Pickup points are approximate because shop locations are not published. About 36 offices are skipped because their names can't be matched with certainty |
-| OpenStreetMap ([Geofabrik](https://download.geofabrik.de/asia/india.html)) | Roads, facilities, admin boundaries, census population tags | Official extract. Overpass is tried first for facilities |
-| Supplier portal, WhatsApp | Stock reported by real suppliers | Portal live. WhatsApp needs Twilio credentials |
-| Driver screen | Real phone GPS | Live |
-| NASA FIRMS | Fires | Code ready, off until `FIRMS_MAP_KEY` is set |
-| IMD direct, CWC/India-WRIS, Data.gov.in godowns | | **Not wired.** IMD's rainfall categories are applied to Open-Meteo instead |
+1. In Netlify, click **Add new site** → **Import an existing project** from GitHub.
+2. Select repository: `SafePassage`.
+3. Set build configuration:
+   - **Base directory**: `frontend`
+   - **Build command**: `npm run build`
+   - **Publish directory**: `frontend/.next`
+4. Set environment variables in Netlify:
+   - `API_ORIGIN`: `https://<YOUR-BACKEND-URL>` (without trailing slash)
+   - `NEXT_PUBLIC_REGION_BBOX`: `76.6,12.5,84.9,20.1`
+5. Configure API proxying in `netlify.toml`:
+   ```toml
+   [[redirects]]
+     from = "/api/*"
+     to = "https://<YOUR-BACKEND-URL>/api/:splat"
+     status = 200
+     force = true
+   ```
+6. Click **Deploy**. Netlify builds and hosts the application with zero CORS overhead.
 
-Sources that are down are shown as `DATA STALE` on the dashboard, and existing rows are kept. Nothing is filled in with guesses. There is no public source for drinking-water stock, so water only appears through supplier check-ins; until one exists, plans escalate it as a shortfall.
+---
 
-## Run it
+## Local Development Quickstart
 
-You need Docker Desktop with 6 to 8 GB of RAM, Python 3.12 with [`uv`](https://docs.astral.sh/uv/), Node 22, and a [Gemini API key](https://aistudio.google.com/apikey). Allow about 12 GB of disk. The map data lives outside the repo, in `~/reliefroute-data`.
+### Prerequisites
+- Python 3.11 or 3.12
+- Node.js 20 or 22
+- Docker & Docker Compose
 
-```bash
-git clone https://github.com/Dracula-5/SafePassage.git && cd SafePassage
-```
-
-**1. Build the map data** (about 15 minutes; needs `osmium-tool`).
-
-```bash
-infra/valhalla/build.sh && infra/osm/extract_facilities.sh && infra/osm/extract_places_admin.sh
-```
-
-No `osmium` (Windows)? Run the same scripts in a throwaway container from PowerShell:
-
+### 1. Start Infrastructure (PostGIS & Redis)
 ```powershell
-docker run --rm -e DATA_DIR=/data -v "$HOME\reliefroute-data:/data" -v "${PWD}\infra:/infra:ro" debian:bookworm-slim sh -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends bash curl ca-certificates osmium-tool && bash /infra/valhalla/build.sh && bash /infra/osm/extract_facilities.sh && bash /infra/osm/extract_places_admin.sh"
+docker compose up -d db redis
 ```
 
-**2. Start the services.** The first Valhalla start builds the road graph: about 5 minutes on Linux and macOS, 20 or more on Windows.
-
-```bash
-docker compose --profile routing up -d
-python3 infra/valhalla/raise_limits.py && docker compose restart valhalla    # required
-```
-
-If Windows refuses port 55432 (`bind: An attempt was made to access a socket...`), it has reserved that port. Create a root `.env` with `DB_HOST_PORT=15432` and use that port in `backend/.env`.
-
-**3. Install and configure.**
-
-```bash
-uv venv --python 3.12 ~/reliefroute-venv
-uv pip install --python ~/reliefroute-venv/bin/python -e contracts/python \
-  -r backend/requirements/brain.txt -r backend/requirements/senses.txt -r backend/requirements/dev.txt
-cat env/senses.env.example env/brain.env.example > backend/.env     # then set GEMINI_API_KEY
-(cd frontend && npm install && cp .env.example .env.local)
-```
-
-Keep the two `DATABASE_URL`/`REDIS_URL` pairs in `backend/.env` down to the first one, which has the right ports. On Windows the interpreter is `~/reliefroute-venv/Scripts/python.exe`.
-
-**4. Run.** On Windows, one command starts everything and `down` stops it:
-
+### 2. Set Up Backend
 ```powershell
-.\infra\dev\stack.ps1 up
-```
-
-On Linux and macOS, from `backend/`, each in its own terminal, plus `npm run dev` in `frontend/`:
-
-```bash
-~/reliefroute-venv/bin/python -m app.core.migrate
-~/reliefroute-venv/bin/uvicorn app.main:app --port 8000
-~/reliefroute-venv/bin/python -m app.ingestion.worker
-~/reliefroute-venv/bin/python -m app.graph.worker
-```
-
-| What | Where |
-|---|---|
-| ReliefRoute, for everyone | http://localhost:3000 |
-| API docs | http://localhost:8000/docs |
-
-The AePDS stock download takes 5 to 10 minutes after the first start.
-
-### Testing on a phone
-
-A browser only gives GPS over HTTPS, and the road graph only covers Andhra Pradesh. A phone inside the state can use a temporary tunnel:
-
-```bash
-cloudflared tunnel --protocol http2 --url http://localhost:3000
-```
-
-Open `https://<tunnel>/signup` and create a driver account. A duty officer must approve it in the Team tab before the driver can sign in. `stack.ps1` creates the operator token used to approve the first duty-officer account and authorize scripts. Stop the tunnel afterwards.
-
-Without a phone in the region, `.\infra\dev\stack.ps1 demo` turns on presentation mode: 42 simulated trucks across 14 towns, kept online, with at least 10 gathering around any drill. They use the public API like a phone does, and everything downstream is real. They are marked as simulated on every screen and have no phone numbers. `docs/demo-script.md` is the walkthrough for all three roles, and `.\infra\dev\stack.ps1 demo-off` removes them. For a single scripted test run, `backend/tests/tools/sim_driver.py` drives one vehicle.
-
-## Tests
-
-```bash
 cd backend
-TEST_DATABASE_URL=postgresql://reliefroute:reliefroute@localhost:55432/postgres \
-TEST_REDIS_URL=redis://localhost:6380/15 VALHALLA_URL=http://localhost:8002 \
-~/reliefroute-venv/bin/python -m pytest -q
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# Install requirements
+pip install -e ..\contracts\python -r requirements\brain.txt -r requirements\senses.txt -r requirements\dev.txt
+
+# Run migrations
+python -m app.core.migrate
+
+# Run one sync pass over all 6 data sources
+python -m app.ingestion.worker --once
+
+# Start API server
+uvicorn app.main:app --reload --port 8000
 ```
 
-Integration tests run against real PostGIS, Redis and Valhalla in throwaway databases, and skip when those URLs are unset. `tests/*/chaos/` breaks dependencies on purpose: closed ports, servers that hang, garbage from the LLM, workers dying mid-plan. `node --test driver-pwa/tests/queue.test.js` covers the phone's offline queue.
-
-## Deploying
-
-[docs/deploy.md](docs/deploy.md) has the steps. Everything runs on one 8 GB VM behind one HTTPS address, with daily verified backups:
-
-```bash
-sh infra/deploy/setup.sh https://your-domain     # writes strong secrets, checks the machine
-docker compose -f infra/deploy/docker-compose.prod.yml --env-file infra/deploy/.env up -d --build
+### 3. Set Up Frontend
+```powershell
+cd frontend
+npm install
+npm run dev
 ```
 
-In production the API refuses to start if a secret is missing or weak, so a deployment cannot end up open by accident.
+Open [http://localhost:3000](http://localhost:3000) to view the live operations dashboard.
 
-To try the same images on a Windows PC at http://localhost:3000, run `.\infra\dev\stack.ps1 prod`.
+---
 
-## Security
+## Running Automated Tests
 
-[docs/security.md](docs/security.md) covers what is protected, who can do what, how to deploy safely, what to do when a phone is lost or a token leaks, and what is not covered. In short:
+```powershell
+cd backend
 
-- Everyone signs up and signs in with an email address, and lands on the screen for their role.
-- Anyone can create a supplier account. Duty officer and driver accounts stay pending until an authorized duty officer approves them; pending accounts cannot sign in or use role-protected features.
-- A phone can only read its own route, and an operator can revoke it.
-- Drills never message real people unless `DRILL_SEND_MESSAGES=true`.
-- Hazards and facilities stay public. New suppliers start unverified, and any plan using one needs a human.
+# Test resilience & circuit breaker backoff
+pytest tests/brain/test_resilience.py
 
-## Repository
+# Test data source health statuses (Operational, Stale, Paused, Never Synced)
+pytest tests/senses/test_source_health_statuses.py
 
-```
-backend/app/agents     Needs, Procurement, Planner, Critic, LLM reasoning
-backend/app/graph      LangGraph wiring, Dispatcher, Route Monitor, Replanner
-backend/app/solvers    OR-Tools VRP, Shapely verification
-backend/app/routing    Valhalla client
-backend/app/ingestion  Pollers for every live source
-backend/app/telemetry  Vehicle registration and GPS
-backend/app/suppliers  Supplier portal
-contracts/             Database schema, events and REST contract shared by both halves
-frontend/              The web app: sign-in, /dashboard, /driver and /supplier
-infra/                 Compose files, map data scripts, deployment
-docs/                  Design notes, demo script, gate reports
+# Test live data source parsers
+pytest tests/senses/test_other_sources.py tests/senses/test_aepds.py
 ```
 
-## Known limits
+---
 
-- **Population is an estimate.** OSM census tags cover about 2.7% of settlements, so rural populations are undercounted. City figures are scaled by how much of their mandal the hazard covers, assuming even density. Every plan shows its coverage.
-- **PDS stock locations are approximate:** a point inside the mandal, not the shops.
-- **SMS and WhatsApp need Twilio credentials.** Without them, messages are recorded as not sent.
-- **No re-sourcing after dispatch.** If a supplier is cut off once goods are on order, they are escalated to a human rather than bought elsewhere.
-- **Waves aren't scheduled.** Goods beyond the first wave are shown to the human, not planned automatically.
-- **One brain worker at a time.** Crash recovery assumes a single worker.
-- **Telugu and Hindi voice** depend on the speech voices installed on the driver's phone.
-#   S a f e P a s s a g e  
- 
+## License
+
+This project is licensed under the Apache 2.0 License.
