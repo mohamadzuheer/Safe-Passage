@@ -106,10 +106,11 @@
   .role { min-height: 104px; }
 }
 
-@media (max-width: 360px) {
-  .card { padding: 22px 16px 18px; }
+@media (max-width: 420px) {
+  .page { padding: 20px 12px; }
+  .card { padding: 22px 14px 18px; }
   .roles { gap: 6px; }
-  .role { font-size: 12.5px; padding: 10px 4px; }
+  .role { font-size: 12px; padding: 8px 3px; min-width: 0; }
   .role small { display: none; }
 }
 

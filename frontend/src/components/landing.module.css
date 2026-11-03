@@ -38,7 +38,19 @@
   .roles { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 520px) {
-  .actions .button { padding: 0 12px; }
+  .top { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+  .brand { font-size: 19px; }
+  .actions { gap: 6px; }
+  .actions .button { padding: 0 10px; font-size: 13px; min-height: 36px; }
+  .hero { padding: 20px 14px 16px; gap: 20px; }
+  .hero h1 { font-size: 28px; line-height: 1.12; }
+  .hero p { font-size: 15px; }
+  .art { padding: 12px; }
+  .stats { grid-template-columns: 1fr; gap: 8px; padding: 0 14px; }
+  .stat { padding: 12px 14px; }
   .stat dd { font-size: 24px; }
+  .roles { padding: 0 14px; margin-top: 18px; }
+  .promise { padding: 0 14px 36px; margin-top: 18px; }
+  .promiseCard { padding: 14px 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .eyebrow i { animation: none; } }

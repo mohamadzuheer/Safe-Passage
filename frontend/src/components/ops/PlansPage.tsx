@@ -62,7 +62,7 @@ function escalationLines(escalations: Escalation[]): string[] {
 
 function moreWillGo(plan: PlanDetail): boolean {
   const retrying = plan.next_wave && plan.status === "failed";
-  return plan.waves_left > 0 && (retrying || ["awaiting_approval", "approved", "dispatched"].includes(plan.status));
+  return (plan.waves_left ?? 0) > 0 && (retrying || ["awaiting_approval", "approved", "dispatched"].includes(plan.status));
 }
 
 function sentByRules(escalation: Escalation): boolean {
@@ -241,19 +241,19 @@ export default function PlansPage() {
                 <div><ActionButton icon="refresh" busy={busy} onClick={planAgain}>Plan again</ActionButton></div>
               )}
               {moreWillGo(detail) && (
-                <Gaps title="Still to send" escalations={detail.escalations.filter(sentByRules)}
+                <Gaps title="Still to send" escalations={(detail.escalations ?? []).filter(sentByRules)}
                   note={detail.status === "failed" ? "The rules try again in a few minutes." : "The rules send the next wave when these trucks finish."} />
               )}
-              {(detail.escalations.length > 0 || detail.needs_person.length > 0) && (
+              {((detail.escalations?.length ?? 0) > 0 || (detail.needs_person?.length ?? 0) > 0) && (
                 <AlertCard tone="warn" title="Needs a person">
-                  {escalationLines(moreWillGo(detail) ? detail.escalations.filter((e) => !sentByRules(e)) : detail.escalations).length > 0 && (
-                    <ul>{escalationLines(moreWillGo(detail) ? detail.escalations.filter((e) => !sentByRules(e)) : detail.escalations).map((line) => <li key={line}>{line}</li>)}</ul>
+                  {escalationLines(moreWillGo(detail) ? (detail.escalations ?? []).filter((e) => !sentByRules(e)) : (detail.escalations ?? [])).length > 0 && (
+                    <ul>{escalationLines(moreWillGo(detail) ? (detail.escalations ?? []).filter((e) => !sentByRules(e)) : (detail.escalations ?? [])).map((line) => <li key={line}>{line}</li>)}</ul>
                   )}
-                  {detail.needs_person.length > 0 && <ul>{detail.needs_person.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
+                  {(detail.needs_person ?? []).length > 0 && <ul>{detail.needs_person!.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
                 </AlertCard>
               )}
 
-              <Surface title={`Delivery routes (${detail.routes.length})`}>
+              <Surface title={`Delivery routes (${(detail.routes ?? []).length})`}>
                 {detail.routes.length === 0 ? <p className={styles.muted}>Routes are written when a plan is approved and dispatched.</p> : (
                   <div className={styles.stackTight}>
                     <div className={styles.stage + " " + styles.stageShort}>

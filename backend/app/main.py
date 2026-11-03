@@ -69,6 +69,12 @@ def install_problem_handlers(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Connections are lazy; the API starts even when Postgres/Redis are down and /health says so.
+    try:
+        from .ingestion.initial_sync import seed_initial_osm
+        pool = await get_pool()
+        await seed_initial_osm(pool)
+    except Exception as exc:
+        log.debug("initial_seed_bypassed", reason=str(exc))
     yield
     await close_pool()
     await close_redis()

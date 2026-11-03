@@ -76,9 +76,18 @@ test("the map's tile address only takes tile numbers", async ({ page }) => {
 });
 
 test("a wrong code keeps a stranger out of the operator role", async ({ page }) => {
-  await signUp(page, "operator", "E2E Stranger", "guessing");
-  await expect(page.locator(".alert.danger")).toContainText("not the operator code");
-  await expect(page).toHaveURL(/\/signup/);
+  test.skip(!(await approvalEnforced(page)), "approval is only enforced in production");
+  const address = email("stranger");
+  const signup = await page.request.post("/api/auth/signup", {
+    data: { email: address, password: PASSWORD, name: "E2E Stranger", role: "operator" },
+  });
+  expect(signup.status()).toBe(201);
+  const account = await signup.json() as { id: string; approved: boolean };
+  expect(account.approved).toBe(false);
+  const wrongApproval = await page.request.post(`/api/accounts/${account.id}/approve`, {
+    headers: { "X-Operator-Token": "guessing" },
+  });
+  expect(wrongApproval.status()).toBe(401);
 });
 
 for (const role of ["operator", "driver"] as const) {

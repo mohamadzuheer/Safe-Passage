@@ -200,11 +200,11 @@ test("a plan that failed says so in the list, and the detail gives the reason", 
   const id = "22222222-bbbb-4bbb-8bbb-000000000002";
   const now = new Date().toISOString();
   const summary = { id, parent_plan_id: null, status: "failed", trigger_kind: "hazard", hazard_ids: [], is_drill: false, requires_approval: false, summary: null, evacuation: false, created_at: now, updated_at: now };
-  const detail = { ...summary, demand: [], routes: [], orders: [], critic: [], approval: null, escalations: [], triage: null, unreachable_reason: "TEST FIXTURE: no online vehicle with a GPS fix (4 offline)" };
+  const detail = { ...summary, demand: [], routes: [], orders: [], critic: [], approval: null, escalations: [], triage: null, needs_person: [], waves_left: 0, unreachable_reason: "TEST FIXTURE: no online vehicle with a GPS fix (4 offline)" };
   const context = await account(browser, "operator");
   const page = await context.newPage();
-  await page.route((url) => url.pathname === "/api/plans", (route) => route.fulfill({ json: [summary] }));
-  await page.route((url) => url.pathname === `/api/plans/${id}`, (route) => route.fulfill({ json: detail }));
+  await page.route((url) => url.pathname === "/api/plans" || url.pathname.endsWith("/api/plans"), (route) => route.fulfill({ json: [summary] }));
+  await page.route((url) => url.pathname === `/api/plans/${id}` || url.pathname.endsWith(`/api/plans/${id}`), (route) => route.fulfill({ json: detail }));
   await page.goto("/dashboard/plans");
   const row = page.locator(`[data-plan="${id}"]`);
   await expect(row).toBeVisible();
