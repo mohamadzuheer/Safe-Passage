@@ -1,0 +1,324 @@
+"""Full agent graph on real PostGIS + real Valhalla (Andhra Pradesh graph) + Postgres checkpointer.
+
+The LLM is a scripted test double (first Sentinel reply is malformed on purpose). All rows below
+are test fixtures written into a throwaway database; coordinates are real places around
+Vijayawada so Valhalla can route between them.
+"""
+
+import os
+from uuid import uuid4
+
+import asyncpg
+import httpx
+import pytest
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+from app.core import bus
+from app.core.db import _init_connection
+from app.core.migrate import apply_all
+from app.core.settings_brain import BrainSettings
+from app.dispatch.messaging import Messenger
+from app.graph import plans, waves
+from app.graph.build import PlanRunner
+from app.graph.dispatcher import dispatch
+from app.graph.audit import Audit
+from app.graph.nodes import Deps
+from app.llm.client import LLMClient
+from app.routing.valhalla import ValhallaClient
+
+from .fakes import SchemaAwareBackend
+
+pytestmark = pytest.mark.integration
+ADMIN_URL = os.environ.get("TEST_DATABASE_URL")
+VALHALLA_URL = os.environ.get("VALHALLA_URL")
+
+
+@pytest.fixture
+async def world(tmp_path):
+    if not (ADMIN_URL and VALHALLA_URL):
+        pytest.skip("TEST_DATABASE_URL and VALHALLA_URL required")
+    admin = await asyncpg.connect(ADMIN_URL)
+    name = f"rr_graph_{uuid4().hex[:8]}"
+    await admin.execute(f'CREATE DATABASE "{name}"')
+    url = f"{ADMIN_URL.rpartition('/')[0]}/{name}"
+    pool = await asyncpg.create_pool(url, init=_init_connection)
+    async with pool.acquire() as conn:
+        await apply_all(conn)
+        hazard = await conn.fetchval(
+            """INSERT INTO hazards (source, source_ref, dedupe_key, hazard_type, severity, headline, geom, fetched_at, expires_at)
+               VALUES ('drill', 'drill:test', 'drill:test', 'flood', 'severe', 'DRILL: Krishna flood',
+                       ST_Multi(ST_MakeEnvelope(80.60, 16.49, 80.66, 16.53, 4326)), now(), now() + interval '2 hours')
+               RETURNING id""")
+        await conn.execute(
+            """INSERT INTO places (source, source_ref, place_type, name, geom, population, population_source, fetched_at)
+               VALUES ('osm', 'node/1', 'suburb', 'A', ST_SetSRID(ST_MakePoint(80.62, 16.51), 4326), 600, 'census2011', now()),
+                      ('osm', 'node/2', 'suburb', 'B', ST_SetSRID(ST_MakePoint(80.64, 16.52), 4326), 400, 'census2011', now()),
+                      ('osm', 'node/3', 'hamlet', 'C', ST_SetSRID(ST_MakePoint(80.63, 16.50), 4326), NULL, NULL, now())""")
+        fac = {}
+        for key, kind, lon, lat in [("school_e", "school", 80.700, 16.540), ("school_w", "school", 80.560, 16.470),
+                                    ("depot", "warehouse", 80.800, 16.535)]:
+            fac[key] = await conn.fetchval(
+                """INSERT INTO facilities (source, source_ref, kind, name, geom, fetched_at)
+                   VALUES ('osm', $1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326), now()) RETURNING id""",
+                f"node/{key}", kind, key, lon, lat)
+        supplier = await conn.fetchval(
+            "INSERT INTO suppliers (facility_id, name, contact_whatsapp) VALUES ($1, 'Test Depot', '+919000000009') RETURNING id",
+            fac["depot"])
+        await conn.execute(
+            """INSERT INTO stock (supplier_id, item_code, quantity, unit_weight_kg, reported_at, reported_via) VALUES
+               ($1, 'WATER_L', 20000, 1, now(), 'portal'), ($1, 'RICE_KG', 300, 1, now(), 'portal')""", supplier)
+        await conn.execute(
+            """INSERT INTO vehicles (label, driver_phone, driver_language, capacity_kg, last_position, last_seen_at)
+               VALUES ('AP-T1', '+919000000010', 'te', 6000, ST_SetSRID(ST_MakePoint(80.75, 16.52), 4326), now())""")
+        plan = await conn.fetchval(
+            "INSERT INTO plans (thread_id, trigger_kind, hazard_ids, requested_by) VALUES ($1, 'drill', $2, 'test') RETURNING id",
+            f"thread-{uuid4()}", [hazard])
+    settings = BrainSettings(database_url=url, redis_url="redis://unused", valhalla_url=VALHALLA_URL, documents_dir=tmp_path)
+    async with httpx.AsyncClient() as http, AsyncPostgresSaver.from_conn_string(url) as saver:
+        await saver.setup()
+        backend = SchemaAwareBackend(malformed_first=True)
+        deps = Deps(pool=pool, valhalla=ValhallaClient(VALHALLA_URL, http), llm=LLMClient(backend),
+                    messenger=Messenger(settings, http), settings=settings)
+        yield {"runner": PlanRunner(deps, saver), "deps": deps, "pool": pool, "plan": str(plan), "hazard": str(hazard),
+               "backend": backend, "docs": tmp_path}
+    await pool.close()
+    await admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+    await admin.close()
+
+
+async def events(pool, plan):
+    return await pool.fetch("SELECT node::text, event_type::text, message, source_ids FROM agent_events WHERE plan_id = $1 ORDER BY id", plan)
+
+
+async def test_graph_pauses_for_approval_then_dispatches_idempotently(world):
+    runner, pool, plan = world["runner"], world["pool"], world["plan"]
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await runner.start(plan, thread, [world["hazard"]])
+
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", plan) == "awaiting_approval"
+    timeline = await events(pool, plan)
+    nodes = [e["node"] for e in timeline]
+    for node in ("sentinel", "needs", "procurement", "route_planner", "critic", "supervisor"):
+        assert node in nodes, node
+    sentinel_llm = next(e for e in timeline if e["node"] == "sentinel" and e["event_type"] == "tool_call")
+    assert "LLM triage" in sentinel_llm["message"]
+    assert world["backend"].calls[:2] == ["sentinel-malformed", "sentinel"]  # repaired on the second try
+    assert any(f"hazard:{world['hazard']}" in e["source_ids"] for e in timeline)
+    needs = next(e for e in timeline if e["node"] == "needs")
+    assert "census-tagged settlements only (67% settlement coverage)" in needs["message"]
+    procurement = next(e for e in timeline if e["node"] == "procurement" and e["event_type"] == "decision")
+    assert "1 shortfall" in procurement["message"]  # 300 kg rice held vs 575 kg needed
+    assert await pool.fetchval("SELECT count(*) FROM orders") == 0  # nothing dispatched before approval
+
+    await pool.execute("INSERT INTO approvals (plan_id, decision, decided_by) VALUES ($1, 'approved', 'duty officer')", plan)
+    await runner.resume(thread, {"decision": "approved", "decided_by": "duty officer", "reason": None})
+
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", plan) == "dispatched"
+    orders = await pool.fetch("SELECT idempotency_key, status::text FROM orders")
+    assert orders and all(o["status"] == "dispatched" for o in orders)
+    route = await pool.fetchrow("SELECT instructions, min_hazard_clearance_m, ST_NPoints(geom) AS n FROM routes")
+    assert route["instructions"]["language"] == "te" and route["instructions"]["text"].startswith("[te] DRILL")
+    assert route["min_hazard_clearance_m"] >= 100 and route["n"] > 10
+    notes = await pool.fetch("SELECT status, error FROM notifications")
+    assert notes and all(n["status"] == "failed" and "drills do not message" in n["error"] for n in notes)
+    assert list(world["docs"].glob("*/PO-*.pdf"))
+    assert await pool.fetchval("SELECT route_status::text FROM v_vehicle_assignment") == "planned"
+
+    # Idempotency: resuming again does nothing; re-running the dispatcher creates nothing new.
+    counts = [await pool.fetchval(f"SELECT count(*) FROM {t}") for t in ("orders", "order_lines", "routes", "notifications")]
+    assert await runner.resume(thread, {"decision": "approved", "decided_by": "x"}) is None
+    state = (await runner.graph.aget_state(runner.config(thread))).values
+    await dispatch(world["deps"], Audit(pool, plan, thread), state)
+    assert [await pool.fetchval(f"SELECT count(*) FROM {t}") for t in ("orders", "order_lines", "routes", "notifications")] == counts
+    assert any("already handled (idempotent)" in e["message"] for e in await events(pool, plan))
+
+
+async def test_a_big_fleet_stays_inside_the_routers_limits(world):
+    runner, pool, plan = world["runner"], world["pool"], world["plan"]
+    await pool.execute(
+        """INSERT INTO vehicles (label, driver_language, capacity_kg, last_position, last_seen_at)
+           SELECT 'TEST-SIM-GPS AP 16 T' || i, 'en', 6000, ST_SetSRID(ST_MakePoint(80.75 + i / 500.0, 16.52), 4326), now()
+           FROM generate_series(1, 40) i""")
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await runner.start(plan, thread, [world["hazard"]])
+
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", plan) == "awaiting_approval"
+    timeline = await events(pool, plan)
+    assert any("Considering the nearest 12 of 41 vehicles" in e["message"] for e in timeline)
+    state = (await runner.graph.aget_state(runner.config(thread))).values
+    labels = [r["vehicle_label"] for r in state["routing"]["routes"]]
+    assert labels and state["routing"]["vehicles_considered"] == 12
+    assert "AP-T1" in labels  # the real truck goes first, ahead of 40 simulated ones
+
+
+async def test_a_driver_who_accepted_a_request_goes_first_even_from_farther_away(world):
+    runner, pool, plan = world["runner"], world["pool"], world["plan"]
+    await pool.execute("UPDATE vehicles SET capacity_kg = 40000")  # either truck can do this alone
+    far = await pool.fetchval(
+        """INSERT INTO vehicles (label, driver_language, capacity_kg, last_position, last_seen_at)
+           VALUES ('AP-FAR', 'en', 40000, ST_SetSRID(ST_MakePoint(80.95, 16.45), 4326), now()) RETURNING id""")
+    await pool.execute("INSERT INTO driver_requests (vehicle_id, hazard_id, requested_by, status) VALUES ($1, $2, 'test', 'accepted')",
+                       far, world["hazard"])  # fmt: skip
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await runner.start(plan, thread, [world["hazard"]])
+    state = (await runner.graph.aget_state(runner.config(thread))).values
+    assert [r["vehicle_label"] for r in state["routing"]["routes"]] == ["AP-FAR"]  # AP-T1 is much nearer
+
+
+async def test_a_clear_plan_goes_out_by_itself(world):
+    runner, pool, plan = world["runner"], world["pool"], world["plan"]
+    await pool.execute("UPDATE suppliers SET verified = true")
+    await pool.execute("UPDATE vehicles SET capacity_kg = 40000")  # one truck can carry it all
+    world["backend"].review = False
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await runner.start(plan, thread, [world["hazard"]])
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", plan) == "dispatched"
+    assert await pool.fetchval("SELECT count(*) FROM routes") >= 1
+    assert await pool.fetchval("SELECT count(*) FROM approvals") == 0
+    assert any("Auto-approved: nothing about this plan is unclear" in e["message"] for e in await events(pool, plan))
+
+
+async def test_an_unclear_plan_says_why_it_needs_a_person(world):
+    runner, pool, plan = world["runner"], world["pool"], world["plan"]
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await runner.start(plan, thread, [world["hazard"]])  # Test Depot is not verified
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", plan) == "awaiting_approval"
+    asked = next(e for e in await events(pool, plan) if e["event_type"] == "approval_requested")
+    assert asked["message"].startswith("Needs a duty officer:") and "Unverified supplier" in asked["message"]
+
+
+async def test_a_cyclone_warning_does_not_close_the_state_but_a_person_decides(world):
+    """Tropical Cyclone FOUR-26: GDACS zones this big left no relief point and timed the router out."""
+    runner, pool, plan = world["runner"], world["pool"], world["plan"]
+    await pool.execute("UPDATE suppliers SET verified = true")
+    await pool.execute("UPDATE vehicles SET capacity_kg = 40000")
+    world["backend"].review = False
+    await pool.execute(
+        """INSERT INTO hazards (source, source_ref, dedupe_key, hazard_type, severity, headline, geom, fetched_at, expires_at)
+           VALUES ('gdacs', 'tc:1', 'tc:1', 'cyclone', 'extreme', 'Tropical Cyclone (red zone)',
+                   ST_Multi(ST_MakeEnvelope(79.5, 15.5, 82.5, 18.5, 4326)), now(), now() + interval '2 hours')""")
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await runner.start(plan, thread, [world["hazard"]])
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", plan) == "awaiting_approval"
+    asked = next(e for e in await events(pool, plan) if e["event_type"] == "approval_requested")
+    assert "Route crosses a wide warning area" in asked["message"]
+
+
+async def first_wave_out(world, monkeypatch) -> dict:
+    """One small truck for a job far bigger than it, the plan out by itself and the truck back again."""
+    pool, plan = world["pool"], world["plan"]
+    async def no_redis(*_args, **_kwargs):
+        return True
+    monkeypatch.setattr(bus, "try_publish", no_redis)
+    await pool.execute("UPDATE suppliers SET verified = true")
+    await pool.execute("UPDATE vehicles SET capacity_kg = 1500")
+    world["backend"].review = False
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await world["runner"].start(plan, thread, [world["hazard"]])
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", plan) == "dispatched"
+    demand = await pool.fetchval("SELECT demand FROM plans WHERE id = $1", plan)
+    return {(line["destination_facility_id"], line["item_code"]): line["quantity"] for line in demand["lines"]}
+
+
+async def trucks_finish(pool) -> None:
+    await pool.execute("UPDATE routes SET status = 'completed', completed_at = now() WHERE status IN ('planned', 'active')")
+
+
+async def test_what_the_trucks_could_not_carry_goes_next_by_itself_and_nothing_goes_twice(world, monkeypatch):
+    runner, pool, deps, hazard = world["runner"], world["pool"], world["deps"], world["hazard"]
+    needed = await first_wave_out(world, monkeypatch)
+    first = await plans.ordered_so_far(pool, [hazard])
+    assert sum(first.values()) < sum(needed.values())
+
+    assert await waves.send_due(deps) == 0  # the truck is still out
+    await trucks_finish(pool)
+    assert await waves.send_due(deps) == 1
+    assert await waves.send_due(deps) == 0  # one wave at a time
+
+    deps.llm = None  # as if Gemini is rate limited: the assessment already made still stands
+    wave = await pool.fetchrow("SELECT id::text, thread_id FROM plans WHERE requested_by = 'next wave'")
+    await runner.start(wave["id"], wave["thread_id"], [hazard])
+    assert await pool.fetchval("SELECT status::text FROM plans WHERE id = $1", wave["id"]) == "dispatched"
+    assert await pool.fetchval("SELECT requires_approval FROM plans WHERE id = $1", wave["id"]) is False
+
+    both = await plans.ordered_so_far(pool, [hazard])
+    assert sum(both.values()) > sum(first.values())
+    assert all(quantity <= needed[key] for key, quantity in both.items())
+
+
+@pytest.mark.parametrize("why_not", [
+    "UPDATE hazards SET expires_at = now() - interval '1 minute'",
+    "UPDATE routes SET completed_at = now() - interval '2 hours'",
+    "UPDATE plans SET escalations = '[]'",
+    """INSERT INTO plans (thread_id, trigger_kind, hazard_ids, requested_by, status)
+       SELECT 'person', 'manual', hazard_ids, 'test', 'awaiting_approval' FROM plans""",
+    """INSERT INTO plans (thread_id, trigger_kind, hazard_ids, requested_by, status)
+       SELECT 'person', 'manual', hazard_ids, 'test', 'rejected' FROM plans""",
+    """INSERT INTO plans (thread_id, trigger_kind, hazard_ids, requested_by, status)
+       SELECT 'last', 'replan', hazard_ids, 'test', 'failed' FROM plans""",
+], ids=["alert-ended", "finished-long-ago", "nothing-left", "a-person-is-deciding", "a-person-said-no", "the-last-plan-failed"])
+async def test_a_wave_waits_or_stops_for_a_reason(world, monkeypatch, why_not):
+    pool = world["pool"]
+    await first_wave_out(world, monkeypatch)
+    await trucks_finish(pool)
+    await pool.execute(why_not)
+    assert await waves.send_due(world["deps"]) == 0
+
+
+async def test_a_wave_that_found_no_stock_tries_again_because_depots_refill(world, monkeypatch):
+    pool, deps, hazard = world["pool"], world["deps"], world["hazard"]
+    await first_wave_out(world, monkeypatch)
+    await trucks_finish(pool)
+    assert await waves.send_due(deps) == 1
+    await pool.execute("UPDATE plans SET status = 'failed', unreachable_reason = 'no supplier has reachable stock' WHERE requested_by = 'next wave'")
+
+    assert await waves.send_due(deps) == 0  # too soon: nothing has had time to change
+    await pool.execute("UPDATE plans SET updated_at = now() - interval '6 minutes' WHERE requested_by = 'next wave'")
+    assert await waves.send_due(deps) == 1
+    assert await pool.fetchval("SELECT count(*) FROM plans WHERE requested_by = 'next wave'") == 2
+    assert await waves.left(pool, [hazard], 10) == 9  # the attempt that found nothing does not count
+
+
+async def test_a_finished_job_does_not_try_again(world, monkeypatch):
+    pool, deps = world["pool"], world["deps"]
+    await first_wave_out(world, monkeypatch)
+    await trucks_finish(pool)
+    assert await waves.send_due(deps) == 1
+    await pool.execute("""UPDATE plans SET status = 'failed', unreachable_reason = $1, updated_at = now() - interval '6 minutes'
+                          WHERE requested_by = 'next wave'""", f"{plans.NOTHING_LEFT}: all ordered")  # fmt: skip
+    assert await waves.send_due(deps) == 0
+
+
+async def test_a_fallback_assessment_is_not_reused_so_the_next_wave_can_do_better(world, monkeypatch):
+    pool, deps, plan = world["pool"], world["deps"], world["plan"]
+    await first_wave_out(world, monkeypatch)
+    await trucks_finish(pool)
+    assert await waves.send_due(deps) == 1
+    wave = await pool.fetchval("SELECT id::text FROM plans WHERE requested_by = 'next wave'")
+    assert await plans.standing_triage(pool, plan) is None  # not a wave: it makes its own
+    assert (await plans.standing_triage(pool, wave))["priority"]
+    await pool.execute("UPDATE plans SET triage = triage || '{\"rationale\": \"RULE-BASED FALLBACK\"}' WHERE id = $1", plan)
+    assert await plans.standing_triage(pool, wave) is None
+
+
+async def test_the_wave_limit_holds_and_the_panel_can_tell(world, monkeypatch):
+    pool, deps, hazard = world["pool"], world["deps"], world["hazard"]
+    await first_wave_out(world, monkeypatch)
+    await trucks_finish(pool)
+    assert await waves.left(pool, [hazard], 10) == 10
+    deps.settings.next_wave_max = 0
+    assert await waves.send_due(deps) == 0
+    assert await waves.left(pool, [hazard], 0) == 0
+
+    await pool.execute("UPDATE hazards SET expires_at = now() - interval '1 minute'")
+    assert await waves.left(pool, [hazard], 10) == 0
+
+
+async def test_rejection_and_missing_vehicle_paths(world):
+    runner, pool, plan = world["runner"], world["pool"], world["plan"]
+    await pool.execute("UPDATE vehicles SET last_seen_at = now() - interval '1 hour'")  # driver offline
+    thread = await pool.fetchval("SELECT thread_id FROM plans WHERE id = $1", plan)
+    await runner.start(plan, thread, [world["hazard"]])
+    row = await pool.fetchrow("SELECT status::text, unreachable_reason FROM plans WHERE id = $1", plan)
+    assert row["status"] == "failed" and "no online vehicle" in row["unreachable_reason"]
+    assert await pool.fetchval("SELECT count(*) FROM orders") == 0

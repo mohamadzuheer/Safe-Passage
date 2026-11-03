@@ -1,0 +1,27 @@
+# secrets
+.env
+.env*
+*.env
+*.env*
+!env/*.env.example
+!frontend/.env.example
+!infra/deploy/.env.example
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+# node
+node_modules/
+.next/
+dist/
+# os / editors
+.DS_Store
+.idea/
+.vscode/
+# local data
+infra/valhalla_tiles/
+*.pbf
